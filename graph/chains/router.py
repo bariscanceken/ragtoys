@@ -2,9 +2,6 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.pydantic_v1 import BaseModel, Field
 from typing import Literal
-from dotenv import load_dotenv
-
-load_dotenv()
 
 class RouteQuery(BaseModel):
     """
@@ -36,8 +33,3 @@ route_prompt = ChatPromptTemplate.from_messages(
 )
 
 question_router  = route_prompt | structured_llm_router
-
-if __name__ == "__main__":
-    print(question_router.invoke(
-        {"questions": "ktü? "}
-    ))

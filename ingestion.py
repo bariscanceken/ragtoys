@@ -10,9 +10,6 @@ warnings.simplefilter('ignore', InsecureRequestWarning)
 import os
 
 
-base_dir = os.path.dirname(os.path.abspath(__file__))
-path_text = os.path.join(base_dir, 'tabulates.txt')
-
 load_dotenv()
 
 urls = [# ok "https://www.ktu.edu.tr/oidb",
@@ -107,12 +104,28 @@ urls = [# ok "https://www.ktu.edu.tr/oidb",
 docs = [WebBaseLoader(url, requests_kwargs={"verify": False, "headers": {"User-Agent": "Mozilla/5.0"}}).load() for url in urls]
 
 docs_list = [
-    BeautifulSoup(doc.page_content, "html.parser").get_text(separator=" ", strip=True).split()
+    BeautifulSoup(doc.page_content, "html.parser").get_text(separator=" ", strip=True)
     for sublist in docs
     for doc in sublist
 ]
 
-if __name__ == "__main__":
-    for text in docs_list:
-        with open(path_text, 'a', encoding='utf-8') as dosya:
-            dosya.write(" ".join(text) + "\n")
+text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+    chunk_size = 600 , chunk_overlap = 100
+)
+
+splits = text_splitter.create_documents(docs_list)
+
+embedder = OpenAIEmbeddings()
+
+vectorstore = Chroma.from_documents(
+    documents=splits,
+    collection_name="ktu-chroma",
+    persist_directory="./.chroma",
+    embedding=embedder
+)
+
+retriever = Chroma(
+    collection_name="ktu-chroma",
+    embedding_function=OpenAIEmbeddings(),
+    persist_directory="./.chroma"
+).as_retriever()
