@@ -1,1 +1,1 @@
-# ktu-llm-telegram-bot
+# fingerscript

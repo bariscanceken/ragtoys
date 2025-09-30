@@ -18,8 +18,8 @@ structured_llm_router = llm.with_structured_output(RouteQuery)
 
 system_prompt = """
 You are an expert at routing user questions to either a vectorstore or websearch.
-The vectorstore contains documents ONLY about agents, Karadeniz Technical University regulations, content, and operation.
-- If the question is clearly related to these topics, ALWAYS route it to 'vectorstore'.
+The vectorstore contains documents ONLY about Python programming, including syntax, libraries, data structures, algorithms, and common Python usage.
+- If the question is clearly related to Python programming topics, ALWAYS route it to 'vectorstore'.
 - For all other questions, ALWAYS route it to 'websearch'.
 - Do not guess; use the vectorstore only for the specified topics.
 - Respond ONLY with the field 'datasource' and its value, either 'vectorstore' or 'websearch'.

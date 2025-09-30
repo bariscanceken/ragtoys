@@ -1,12 +1,6 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.pydantic_v1 import BaseModel, Field
-from dotenv import load_dotenv
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-from ingestion import retriever
-load_dotenv()
 
 llm = ChatOpenAI(temperature=0)
 
@@ -35,10 +29,3 @@ grade_prompt = ChatPromptTemplate.from_messages(
 retrieval_grader = grade_prompt| structured_llm_grader
 
 
-if __name__ == "__main__":
-    user_question = "Akademik  Takvime  nereden  bakabilirim?"
-    docs = retriever.get_relevant_documents(user_question)
-    retrieved_document = docs[0].page_content
-    print(retrieval_grader.invoke(
-        {"questions": user_question, "document": retrieved_document}
-    ))
