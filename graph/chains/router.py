@@ -28,7 +28,7 @@ The vectorstore contains documents ONLY about Python programming, including synt
 route_prompt = ChatPromptTemplate.from_messages(
     [
     ("system" , system_prompt),
-    ("human" , "{questions}")
+    ("human" , "{question}")
     ]
 )
 

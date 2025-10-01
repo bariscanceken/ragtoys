@@ -22,7 +22,7 @@ Give a binary score 'yes' or 'no'. 'Yes' means that the answer is grounded in / 
 grade_prompt = ChatPromptTemplate.from_messages(
     [
     ('system' , system_prompt),
-    ('human' , "Retrieved document: {document} User questions: {questions}")
+    ('human' , "Retrieved document: {document} User question: {question}")
     ]
 )
 

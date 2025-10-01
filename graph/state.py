@@ -1,6 +1,7 @@
-from typing import List, TypedDict
+from pydantic import BaseModel, Field
+from typing import List, Optional, Any
 
-class GraphState:
+class GraphState(BaseModel):
     """
     Represent the state of a graph
     Attributes:
@@ -10,7 +11,6 @@ class GraphState:
         documents: list of documents
     """
     question: str
-    generation: str
-    web_search: bool 
-    documents: List[str]
-    
+    generation: Optional[str] = ""
+    web_search: Optional[bool] = False
+    documents: Optional[List[Any]] = Field(default_factory=list)
