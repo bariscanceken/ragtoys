@@ -25,7 +25,7 @@ splits = text_splitter.split_documents(docs)
 embedder = OpenAIEmbeddings()
 
 vectorstore = Chroma(
-    collection_name="py-chroma",
+    collection_name="ragtoys-chroma",
     persist_directory="./.chroma",
     embedding_function=embedder
 )

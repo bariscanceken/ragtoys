@@ -1,202 +1,723 @@
-from dotenv import load_dotenv
-from graph.graph import app
-load_dotenv()
 import streamlit as st
+from PIL import Image
+import sqlite3
+import bcrypt
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import random
+import string
+from streamlit_drawable_canvas import st_canvas
 import io
-import contextlib
-from datetime import datetime
-from pathlib import Path
+import time
+import base64
+import os
+from elevenlabs.client import ElevenLabs
+from dotenv import load_dotenv
+load_dotenv()
+from graph.graph import app 
+  
 
+con = sqlite3.connect("C:\\Users\\baris\\OneDrive\\Masaüstü\\önemli\\ragtoys.db")
+c = con.cursor()
 
-# Sayfa ayarları
-st.set_page_config(layout="wide", page_title="note.py Arayüzü", page_icon="📝")
-
-# -------------------
-# Session state başlangıç
-# -------------------
-if "notes" not in st.session_state:
-    st.session_state.notes = [
-        {"title": "İlk Not", "markdown": "# Hoş geldiniz\nBurada markdown yazabilirsiniz.", "code": "print('Merhaba Dünya!')"}
-    ]
-if "selected_note_idx" not in st.session_state:
-    st.session_state.selected_note_idx = 0
-
-if "conversations" not in st.session_state:
-    # Her sohbet: {"created_at": datetime, "messages": [{role, content}]}
-    st.session_state.conversations = [
-        {"created_at": datetime.now(), "messages": []}
-    ]
-if "current_conv_idx" not in st.session_state:
-    st.session_state.current_conv_idx = 0
-
-# Üst başlık alanı (logo + başlık)
-with st.container():
-    st.markdown("<h1 style='margin:0;text-align:center'>note.py</h1><p style='margin-top:4px;color:#64748B;text-align:center'>Notlar, Markdown, Python ve Sohbet</p>", unsafe_allow_html=True)
-    st.markdown("---")
-
-# Layout: üç sütun (sol, orta, sağ)
-left_col, center_col, right_col = st.columns([1.2, 3, 1])
-
-# -------------------
-# Sol panel (Notlar)
-# -------------------
-with left_col:
-    st.header("Notlar")
-    st.markdown("<style>.stRadio > label{display:none}</style>", unsafe_allow_html=True)
-
-    # Not ekleme
-    with st.form("note_add_form", clear_on_submit=True):
-        new_title = st.text_input("Yeni not başlığı")
-        submitted = st.form_submit_button("Ekle")
-        if submitted and new_title.strip():
-            st.session_state.notes.append({"title": new_title.strip(), "markdown": "", "code": ""})
-            st.session_state.selected_note_idx = len(st.session_state.notes) - 1
-
-    # Arama/filtre
-    filter_query = st.text_input("Ara", placeholder="Başlıkta ara…")
-    filtered = [
-        (i, note) for i, note in enumerate(st.session_state.notes)
-        if not filter_query or filter_query.lower() in (note["title"] or "").lower()
-    ]
-
-    # Not listesi
-    note_titles = [note["title"] or f"Not {i+1}" for i, note in filtered]
-    default_index = 0
-    for j, (orig_idx, _) in enumerate(filtered):
-        if orig_idx == st.session_state.selected_note_idx:
-            default_index = j
-            break
-    selected_title = st.radio("Notlar", note_titles, index=default_index if note_titles else 0, key="notes_radio") if note_titles else None
-    if selected_title is not None:
-        # Yeni seçimi gerçek indeksine çevir
-        st.session_state.selected_note_idx = filtered[note_titles.index(selected_title)][0]
-
-    # Seçili not işlemleri
-    sel_idx = st.session_state.selected_note_idx
-    if 0 <= sel_idx < len(st.session_state.notes):
-        with st.expander("Seçili not işlemleri", expanded=True):
-            new_name = st.text_input("Yeniden adlandır", value=st.session_state.notes[sel_idx]["title"], key=f"rename_input_{sel_idx}")
-            col_a, col_b, col_c = st.columns(3)
-            with col_a:
-                if st.button("Kaydet"):
-                    st.session_state.notes[sel_idx]["title"] = new_name.strip() or st.session_state.notes[sel_idx]["title"]
-            with col_b:
-                confirm_delete = st.checkbox("Silmeyi onayla", key=f"confirm_del_{sel_idx}")
-                if st.button("Sil") and confirm_delete:
-                    del st.session_state.notes[sel_idx]
-                    if not st.session_state.notes:
-                        st.session_state.notes.append({"title": "Yeni Not", "markdown": "", "code": ""})
-                    st.session_state.selected_note_idx = max(0, min(sel_idx, len(st.session_state.notes) - 1))
-                    st.experimental_rerun()
-            with col_c:
-                # Önceki/sonraki kısayolları
-                prev_disabled = sel_idx <= 0
-                next_disabled = sel_idx >= len(st.session_state.notes) - 1
-                if st.button("← Önceki", disabled=prev_disabled):
-                    st.session_state.selected_note_idx -= 1
-                    st.experimental_rerun()
-                if st.button("Sonraki →", disabled=next_disabled):
-                    st.session_state.selected_note_idx += 1
-                    st.experimental_rerun()
-
-# -------------------
-# Orta panel (Başlık + Markdown/Python)
-# -------------------
-with center_col:
-    sel_idx = st.session_state.selected_note_idx
-    note = st.session_state.notes[sel_idx]
-
-    st.header("Çalışma Alanı")
-    note_title = st.text_input("Başlık", value=note["title"], key=f"center_title_input_{sel_idx}")
-    if note_title != note["title"]:
-        note["title"] = note_title
-
-    tabs = st.tabs(["Markdown", "Python Kod"])
-
-    # Markdown sekmesi
-    with tabs[0]:
-        col_edit, col_preview = st.columns(2)
-        with col_edit:
-            md_content = st.text_area("Markdown", value=note["markdown"], height=300, key=f"md_text_area_{sel_idx}")
-            note["markdown"] = md_content
-            st.download_button(
-                label="Markdown'u indir",
-                data=md_content,
-                file_name=f"{note['title'] or 'not'}.md",
-                mime="text/markdown"
-            )
-        with col_preview:
-            st.markdown("Önizleme", help="Markdown içeriğinin canlı önizlemesi")
-            st.markdown(md_content or "_Henüz içerik yok_", unsafe_allow_html=False)
-
-    # Python sekmesi
-    with tabs[1]:
-        code_content = st.text_area("Python kodu", value=note["code"], height=300, key=f"py_text_area_{sel_idx}")
-        note["code"] = code_content
-        run = st.button("Kodu Çalıştır")
-        if run:
-            stdout_buffer = io.StringIO()
-            exec_globals = {}
-            try:
-                with contextlib.redirect_stdout(stdout_buffer):
-                    exec(code_content, exec_globals)
-                output = stdout_buffer.getvalue()
-                if not output:
-                    output = "(Çıktı yok)"
-                st.success("Çalıştırma tamamlandı")
-                st.code(output)
-            except Exception as ex:
-                st.error(f"Hata: {ex}")
-
-# -------------------
-# Sağ panel (Sohbetler)
-# -------------------
-with right_col:
-    st.header("Sohbetler")
-
-    # Sohbet seçimi ve yeni konuşma
-    conv_labels = [
-        f"Sohbet {i+1} - {c['created_at'].strftime('%d.%m %H:%M')} ({len(c['messages'])} msj)"
-        for i, c in enumerate(st.session_state.conversations)
-    ]
-
-    if conv_labels:
-        current_label = conv_labels[st.session_state.current_conv_idx]
+def check_login(input_username, input_password):
+    
+    c.execute("SELECT password FROM users WHERE username = ?", (input_username,))
+    result = c.fetchone()
+    if result:
+        stored_hash = result[0]
+        if bcrypt.checkpw(input_password.encode('utf-8'), stored_hash):
+            st.query_params["page"] = "main"
+            st.rerun()
+        else:
+            st.warning("Hatalı Deneme!")
     else:
-        current_label = None
+        st.warning("Hatalı Deneme!")
 
-    selected_conv = st.selectbox(
-        "Önceki konuşmalar",
-        options=conv_labels,
-        index=st.session_state.current_conv_idx if conv_labels else 0,
-        key="conv_select"
-    ) if conv_labels else None
+def response_generator():
+    try:
+        response = str(app.invoke(input={"question": prompt}).get("generation") or "(Yanıt bulunamadı)")
+    except:
+        response = "(Yanıt bulunamadı)"
+    
+    for word in response.split():
+        yield word + " "
+        time.sleep(0.05)
 
-    if selected_conv is not None:
-        st.session_state.current_conv_idx = conv_labels.index(selected_conv)
+def mail_nt_r(input_name, input_email):
+    try:
+        sender_email = "bariscancekenx@gmail.com"
+        sender_password = "gqmh rbeq ohdv vjqv"
 
-    if st.button("Yeni konuşma"):
-        st.session_state.conversations.insert(0, {"created_at": datetime.now(), "messages": []})
-        st.session_state.current_conv_idx = 0
+        verification_code = ''.join(random.choices(string.digits, k=6))
+        st.session_state.verification_code = verification_code
 
-    # Yeni mesaj girişi
-    user_msg = st.chat_input("Mesaj yazın…", key="chat")
-    conv = st.session_state.conversations[st.session_state.current_conv_idx]
-    if user_msg and user_msg.strip():
-        conv["messages"].append({"role": "user", "content": user_msg})
-        try:
-            result = app.invoke(input={"question": user_msg})
-            reply = result.get("generation") or "(generation alanı boş)"
-        except Exception as ex:
-            reply = f"Hata: {ex}"
-        conv["messages"].append({"role": "assistant", "content": reply})
+        message = MIMEMultipart()
+        message["From"] = sender_email
+        message["To"] = input_email
+        message["Subject"] = "ragtoys - E-posta Doğrulama Kodu"
 
-    # Sohbet mesajlarını ekleme-sonrası render et
-    for msg in conv["messages"]:
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+        body = f"""
+        Merhaba {input_name},
 
-#    if __name__ == "__main__":
-#        result = app.invoke(input={"question": f"{user_msg}"})
-#        print("\n--- CEVAP ---\n")
-#        print(result.get("generation", "(generation alanı boş)"))
+        ragtoys için aşağıdaki doğrulama kodunu kullanın:
+
+        {verification_code}
+
+        Bu kod 1 saat geçerlidir.
+
+        Saygılarımızla,
+        ragtoys Ekibi
+        """
+
+        message.attach(MIMEText(body, "plain"))
+
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(message)
+        
+        st.success("Doğrulama kodu e-posta adresinize gönderildi!")
+        return True
+        
+    except Exception as e:
+        st.error(f"E-posta gönderilirken hata oluştu: {str(e)}")
+        return False
+
+def reset_password_email(input_email):
+    try:
+        conn = sqlite3.connect("C:\\Users\\baris\\OneDrive\\Masaüstü\\önemli\\ragtoys.db", timeout=30)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE email = ?", (input_email,))
+        user = cursor.fetchone()
+        conn.close()
+        
+        if user:
+            sender_email = "bariscancekenx@gmail.com"
+            sender_password = "gqmh rbeq ohdv vjqv"
+
+            # Şifre sıfırlama kodu oluştur
+            reset_code = ''.join(random.choices(string.digits, k=6))
+            st.session_state.reset_code = reset_code
+            st.session_state.reset_email = input_email
+
+            message = MIMEMultipart()
+            message["From"] = sender_email
+            message["To"] = input_email
+            message["Subject"] = "ragtoys - Şifre Sıfırlama Kodu"
+
+            body = f"""
+            Merhaba,
+
+            ragtoys hesabınız için şifre sıfırlama kodunuz:
+
+            {reset_code}
+
+            Bu kod 1 saat geçerlidir.
+
+            Saygılarımızla,
+            ragtoys Ekibi
+            """
+
+            message.attach(MIMEText(body, "plain"))
+
+            with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                server.starttls()
+                server.login(sender_email, sender_password)
+                server.send_message(message)
+            
+            st.success("Şifre sıfırlama kodu e-posta adresinize gönderildi!")
+            return True
+        else:
+            st.error("Bu e-posta adresi ile kayıtlı kullanıcı bulunamadı!")
+            return False
+            
+    except Exception as e:
+        st.error(f"E-posta gönderilirken hata oluştu: {str(e)}")
+        return False
+
+def register(input_name,input_surname,input_username_r,input_email,input_password_r,input_password_r2,checkbox_privacy):
+    c.execute("SELECT * FROM users WHERE email = ?", (input_email,))
+    e_mail = c.fetchone()
+    c.execute("SELECT * FROM users WHERE username = ?", (input_username_r,))
+    e_username = c.fetchone()
+
+    if e_mail is None and input_email:
+        if input_name and input_surname:
+            if (input_password_r == input_password_r2) and input_password_r:
+                if checkbox_privacy == 1: 
+                    if e_username is None and input_username_r:
+                        # Kullanıcı bilgilerini session state'e kaydet
+                        st.session_state.input_name = input_name
+                        st.session_state.input_surname = input_surname
+                        st.session_state.input_username_r = input_username_r
+                        st.session_state.input_email = input_email
+                        st.session_state.input_password_r = bcrypt.hashpw(input_password_r.encode('utf-8'), bcrypt.gensalt())
+                        st.session_state.checkbox_privacy = checkbox_privacy
+                        
+                        if mail_nt_r(input_name, input_email):
+                            st.query_params["page"] = "verify"
+                            st.rerun()
+                    else:
+                        st.warning("Böyle Bir Kullanıcı Zaten Var!")
+                else:
+                    st.warning("Sözleşme kabul edilmeli!")
+            else:
+                st.warning("Şifreler Eşleşmiyor!")
+        else:
+            st.warning("Bir İsim Girilmedi!")
+    else:
+        st.warning("Bu Mail Zaten Kullanılmış!")
+
+    
+
+page = st.query_params.get("page", "login")
+
+if page == 'login':
+    st.set_page_config(layout="wide", page_title="ragtoys login page")
+
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            color: #d4ff00;  /* tüm yazı rengi */
+        }
+
+        /* Input ve buton yazıları */
+        .stTextInput>div>div>input {
+            color: #d4ff00;
+        }
+        .stButton>button {
+            color: #d4ff00;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+    logo = Image.open("C:\\Users\\baris\\OneDrive\\Masaüstü\\ragtoys\\logo.jpeg")
+    with st.container():
+        st.image(logo, width=200)
+        st.markdown(
+            "<h1 style='margin:0;text-align:center'>ragtoys</h1>"
+            "<p style='margin-top:4px;color:#64748B;text-align:center'>Oyuncaklar, Çocuklar ve Gelecek</p>",
+            unsafe_allow_html=True)
+        
+
+    left_col, center_col, right_col = st.columns([1, 1, 1])
+
+    with center_col:
+        
+        st.write("") 
+        st.write("")
+        st.write("") 
+        st.write("")
+        input_username = st.text_input("Kullanıcı adınızı giriniz.")
+        st.session_state['input_username'] = input_username
+        input_password = st.text_input("Şifrenizi giriniz.", type="password")
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
+        st.write("")
+        st.write("")
+
+        with col1:
+            if st.button("Giriş Yap"):
+                check_login(input_username=input_username,input_password=input_password)
+            
+        with col2:
+            st.write("")
+        with col3:
+            if st.button("Unuttum"):
+                st.query_params["page"] = "forget"
+                st.rerun()
+        with col4:
+            st.write("")
+        with col5:
+            if st.button("Kayıt Olun!"):
+                st.query_params["page"] = "register"
+                st.rerun()
+
+
+if page == 'forget':
+    st.set_page_config(layout="wide", page_title="ragtoys forget page")
+
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            color: #d4ff00;  /* tüm yazı rengi */
+        }
+
+        /* Input ve buton yazıları */
+        .stTextInput>div>div>input {
+            color: #d4ff00;
+        }
+        .stButton>button {
+            color: #d4ff00;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+    logo = Image.open("C:\\Users\\baris\\OneDrive\\Masaüstü\\ragtoys\\logo.jpeg")
+    with st.container():
+        st.image(logo, width=200)
+        st.markdown(
+            "<h1 style='margin:0;text-align:center'>ragtoys</h1>"
+            "<p style='margin-top:4px;color:#64748B;text-align:center'>Oyuncaklar, Çocuklar ve Gelecek</p>",
+            unsafe_allow_html=True)
+        
+    left_col, center_col, right_col = st.columns([1, 1, 1])
+
+    with center_col:
+        st.write("") 
+        st.write("")
+        st.write("") 
+        st.write("")
+        input_email = st.text_input("E-posta Adresinizi Giriniz.")
+        
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
+        with col1:
+            if st.button("Geri Dön"):
+                st.query_params["page"] = "login"
+                st.rerun()
+        with col2:
+            st.write("")
+        with col3:
+            if st.button("Sıfırlayın"):
+                if input_email:
+                    if reset_password_email(input_email):
+                        st.query_params["page"] = "reset_password"
+                        st.rerun()
+                else:
+                    st.warning("Lütfen e-posta adresinizi giriniz!")
+        with col4:
+            st.write("")
+        with col5:
+            st.write("")
+    
+if page == 'register':
+    st.set_page_config(layout="wide", page_title="ragtoys register page")
+
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            color: #d4ff00;  /* tüm yazı rengi */
+        }
+
+        /* Input ve buton yazıları */
+        .stTextInput>div>div>input {
+            color: #d4ff00;
+        }
+        .stButton>button {
+            color: #d4ff00;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+    logo = Image.open("C:\\Users\\baris\\OneDrive\\Masaüstü\\ragtoys\\logo.jpeg")
+    with st.container():
+        st.image(logo, width=200)
+        st.markdown(
+            "<h1 style='margin:0;text-align:center'>ragtoys</h1>"
+            "<p style='margin-top:4px;color:#64748B;text-align:center'>Oyuncaklar, Çocuklar ve Gelecek</p>",
+            unsafe_allow_html=True)
+        
+    left_col, center_col, right_col = st.columns([1, 1, 1])
+
+    with center_col:
+        st.write("") 
+        st.write("")
+        st.write("") 
+        st.write("")
+        input_name = st.text_input("Adınızı Giriniz.")
+        input_surname = st.text_input("Soyadınızı Giriniz.")
+        input_username_r = st.text_input("Kullanıcı Adı Giriniz.")
+        input_email = st.text_input("Mail Adresinizi Giriniz.")
+        input_password_r = st.text_input("Şifrenizi Seçiniz.", type="password")
+        input_password_r2 = st.text_input("Seçtiğiniz Şifrenizi Tekrar Giriniz.", type="password")
+        with st.expander("**:blue[Gizlilik Sözleşmesini Oku]**"):
+            st.markdown("""
+            Gizlilik Sözleşmesi
+
+            1. Kişisel Verilerin Toplanması
+            Kullanıcılarımızdan, hizmetlerimizi sağlamak ve deneyiminizi iyileştirmek amacıyla bazı kişisel bilgiler (isim, e-posta, kullanım tercihleri vb.) toplanabilir.
+
+            2. Kişisel Verilerin Kullanımı
+            Toplanan bilgiler, yalnızca:
+
+            Hizmetlerin doğru çalışmasını sağlamak,
+
+            Kullanıcı taleplerine yanıt vermek,
+
+            İyileştirme ve analiz yapmak amacıyla kullanılacaktır.
+
+            3. Kişisel Verilerin Paylaşımı
+            Kullanıcı bilgileriniz, üçüncü kişilerle paylaşılmaz; yalnızca yasal zorunluluklar çerçevesinde yetkili mercilerle paylaşılabilir.
+
+            4. Çerezler ve Takip Teknolojileri
+            Web sitemiz/uygulamamız, deneyiminizi geliştirmek için çerez ve benzeri teknolojiler kullanabilir. Kullanıcı, tarayıcı ayarları ile çerezleri yönetebilir.
+
+            5. Güvenlik
+            Kişisel bilgileriniz, güvenli sunucular ve şifreleme yöntemleriyle korunmaktadır. Yetkisiz erişimlere karşı azami önlem alınmıştır.
+
+            6. Kullanıcı Hakları
+            Kullanıcılar, kişisel verilerine erişim, düzeltme veya silme hakkına sahiptir. Bu hakları kullanmak için bizimle iletişime geçebilirsiniz.
+
+            7. Onay
+            Hizmetlerimizi kullanmaya devam ederek, bu gizlilik sözleşmesini okuduğunuzu ve kabul ettiğinizi onaylamış olursunuz.
+            """)
+        checkbox_privacy = st.checkbox("Gizlilik Sözleşmesini Onaylıyorum.")
+        
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
+        with col1:
+            if st.button("Geri Dön"):
+                st.query_params["page"] = "login"
+                st.rerun()
+        with col2:
+            st.write("")
+        with col3:
+            st.write("")
+        with col4:
+            st.write("")
+        with col5:
+            if st.button("Kayıt Olun!"):
+                register(input_name,input_surname,input_username_r,input_email,input_password_r,input_password_r2,checkbox_privacy)
+    
+
+if page == 'verify':
+        st.set_page_config(layout="wide", page_title="ragtoys login page")
+
+        st.markdown(
+            """
+            <style>
+            .stApp {
+                color: #d4ff00;  /* tüm yazı rengi */
+            }
+
+            /* Input ve buton yazıları */
+            .stTextInput>div>div>input {
+                color: #d4ff00;
+            }
+            .stButton>button {
+                color: #d4ff00;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+
+
+        logo = Image.open("C:\\Users\\baris\\OneDrive\\Masaüstü\\ragtoys\\logo.jpeg")
+        with st.container():
+            st.image(logo, width=200)
+            st.markdown(
+                "<h1 style='margin:0;text-align:center'>ragtoys</h1>"
+                "<p style='margin-top:4px;color:#64748B;text-align:center'>Oyuncaklar, Çocuklar ve Gelecek</p>",
+                unsafe_allow_html=True)
+            
+
+        left_col, center_col, right_col = st.columns([1, 1, 1])
+
+        with center_col:
+            
+            st.write("") 
+            st.write("")
+            st.write("") 
+            st.write("")
+            input_verify = st.text_input("Doğrulama Kodunu Giriniz:")
+            col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
+            st.write("")
+            st.write("")
+
+            if "a" not in st.session_state:
+                st.session_state.a = False
+
+            if "verification_code" not in st.session_state:
+                st.session_state.verification_code = ""
+
+            if "input_verify" not in st.session_state:
+                st.session_state.input_verify = ""
+
+            with col1:
+                if st.button("Doğrula"):
+                    if st.session_state.verification_code == input_verify:
+                        c.execute("INSERT INTO users (name,surname,username,email,password,applied_privacy) values (?,?,?,?,?,?)",
+                        (st.session_state.input_name, st.session_state.input_surname, st.session_state.input_username_r, 
+                         st.session_state.input_email, st.session_state.input_password_r, st.session_state.checkbox_privacy))   
+                        con.commit()
+                        st.success("Kayıt başarılı! Giriş sayfasına yönlendiriliyorsunuz.")
+                        st.query_params["page"] = "login"
+                        st.rerun()
+                    else:
+                         st.error("Doğrulama kodu hatalı!")
+
+if page == 'reset_password':
+    st.set_page_config(layout="wide", page_title="ragtoys reset password page")
+
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            color: #d4ff00;  /* tüm yazı rengi */
+        }
+
+        /* Input ve buton yazıları */
+        .stTextInput>div>div>input {
+            color: #d4ff00;
+        }
+        .stButton>button {
+            color: #d4ff00;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    logo = Image.open("C:\\Users\\baris\\OneDrive\\Masaüstü\\ragtoys\\logo.jpeg")
+    with st.container():
+        st.image(logo, width=200)
+        st.markdown(
+            "<h1 style='margin:0;text-align:center'>ragtoys</h1>"
+            "<p style='margin-top:4px;color:#64748B;text-align:center'>Şifre Sıfırlama</p>",
+            unsafe_allow_html=True)
+        
+    left_col, center_col, right_col = st.columns([1, 1, 1])
+
+    with center_col:
+        st.write("") 
+        st.write("")
+        st.write("") 
+        st.write("")
+        input_reset_code = st.text_input("Sıfırlama Kodunu Giriniz:")
+        input_new_password = st.text_input("Yeni Şifrenizi Giriniz:", type="password")
+        input_new_password2 = st.text_input("Yeni Şifrenizi Tekrar Giriniz:", type="password")
+        
+        col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
+        with col1:
+            if st.button("Geri Dön"):
+                st.query_params["page"] = "login"
+                st.rerun()
+        with col2:
+            st.write("")
+        with col3:
+            if st.button("Şifreyi Sıfırla"):
+                if input_reset_code == st.session_state.reset_code:
+                    if input_new_password == input_new_password2 and input_new_password:
+                        # Şifreyi güncelle
+                        conn = sqlite3.connect("C:\\Users\\baris\\OneDrive\\Masaüstü\\önemli\\ragtoys.db", timeout=30)
+                        cursor = conn.cursor()
+                        hashed_password = bcrypt.hashpw(input_new_password.encode('utf-8'), bcrypt.gensalt())
+                        cursor.execute("UPDATE users SET password = ? WHERE email = ?", 
+                                     (hashed_password, st.session_state.reset_email))
+                        conn.commit()
+                        conn.close()
+                        st.success("Şifreniz başarıyla güncellendi! Giriş sayfasına yönlendiriliyorsunuz.")
+                        st.query_params["page"] = "login"
+                        st.rerun()
+                    else:
+                        st.error("Şifreler eşleşmiyor!")
+                else:
+                    st.error("Sıfırlama kodu hatalı!")
+        with col4:
+            st.write("")
+        with col5:
+            st.write("")
+
+if page == 'main':
+    st.set_page_config(layout="wide", page_title="ragtoys main page")
+
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            color: #d4ff00;  /* tüm yazı rengi */
+        }
+
+        /* Input ve buton yazıları */
+        .stTextInput>div>div>input {
+            color: #d4ff00;
+        }
+        .stButton>button {
+            color: #d4ff00;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+    logo = Image.open("C:\\Users\\baris\\OneDrive\\Masaüstü\\ragtoys\\logo.jpeg")
+    with st.container():
+        st.image(logo, width=200)
+        st.markdown(
+            "<h1 style='margin:0;text-align:center'>ragtoys</h1>"
+            "<p style='margin-top:4px;color:#64748B;text-align:center'>Oyuncaklar, Çocuklar ve Gelecek</p>",
+            unsafe_allow_html=True)
+        
+
+    left_col, right_col = st.columns([3 , 1])
+
+    with st.sidebar:
+        st.header("Ayarlar")
+        stroke_width = st.slider("Çizgi Kalınlığı", 1, 50, 4)
+        stroke_color = st.color_picker("Çizgi Rengi", "#000000")
+        bg_color = st.color_picker("Arkaplan Rengi", "#ffffff")
+        realtime = st.checkbox("Gerçek zamanlı göster", True)
+        save_btn = st.button("Çizimi Kaydet")
+        send_btn = st.button("Çizimi Gönder")
+        if st.button("Çıkış"):
+            st.query_params["page"] = "login"
+            st.rerun()
+        if st.button("Son kaydedilen tuvali göster"):
+            username = st.session_state.get('input_username')
+            if not username:
+                st.warning("Önce kullanıcı adıyla giriş yapın.")
+            else:
+                c.execute("SELECT user_id FROM users WHERE username = ?", (username,))
+                user_row = c.fetchone()
+                if not user_row:
+                    st.warning("Kullanıcı bulunamadı!")
+                else:
+                    uid = user_row[0]
+                    c.execute("SELECT tuval_durum FROM canvas WHERE user_id = ? ORDER BY id DESC LIMIT 1", (uid,))
+                    row = c.fetchone()
+                    if row:
+                        img_data = row[0]
+                        st.image(io.BytesIO(img_data))
+                    else:
+                        st.warning("Kayıt bulunamadı!")
+        
+        # Gönderme işlemi mantığı aşağıda, canvas oluşturulduktan sonra çalıştırılacak
+
+    with left_col:
+        canvas_result = st_canvas(
+            fill_color="rgba(0,0,0,0)",
+            stroke_width=stroke_width,
+            stroke_color=stroke_color,
+            background_color=bg_color,
+            height=600,
+            width=900,
+            drawing_mode="freedraw",
+            key="canvas",
+            display_toolbar=True,
+            )
+    c.execute("select user_id from users where username = ?", (st.session_state.get('input_username', ''),))
+    user_id_k = c.fetchone()
+    if user_id_k:
+        user_id_k = user_id_k[0]
+
+    if save_btn:
+        if not user_id_k:
+            st.warning("Kullanıcı bulunamadı; önce giriş yapın.")
+        elif canvas_result.image_data is not None:
+            # Pillow ile resmi dönüştür
+            img = Image.fromarray((canvas_result.image_data).astype("uint8"))
+            buffer = io.BytesIO()
+            img.save(buffer, format="PNG")
+            img_data = buffer.getvalue()
+            c.execute(
+                "INSERT INTO canvas (user_id, tuval_durum) VALUES (?, ?)",
+                (user_id_k, img_data)
+            )
+            con.commit()
+            st.success("Tuval başarıyla kaydedildi!")
+
+    # Çizimi Gönder: Önce mevcut tuvali al, yoksa son kaydı kullan
+    if send_btn:
+        username = st.session_state.get('input_username')
+        if not username:
+            st.warning("Önce kullanıcı adıyla giriş yapın.")
+        else:
+            c.execute("SELECT user_id FROM users WHERE username = ?", (username,))
+            user_row = c.fetchone()
+            if not user_row:
+                st.warning("Kullanıcı bulunamadı!")
+            else:
+                uid = user_row[0]
+                img_bytes_to_send = None
+                # Öncelik: o anki tuval
+                if canvas_result.image_data is not None:
+                    try:
+                        current_img = Image.fromarray((canvas_result.image_data).astype("uint8"))
+                        buf = io.BytesIO()
+                        current_img.save(buf, format="PNG")
+                        img_bytes_to_send = buf.getvalue()
+                    except Exception:
+                        img_bytes_to_send = None
+                # Yedek: son kaydedilen tuval
+                if img_bytes_to_send is None:
+                    c.execute("SELECT tuval_durum FROM canvas WHERE user_id = ? ORDER BY id DESC LIMIT 1", (uid,))
+                    last_row = c.fetchone()
+                    if last_row:
+                        img_bytes_to_send = last_row[0]
+                if img_bytes_to_send is None:
+                    st.warning("Gönderilecek bir tuval bulunamadı. Lütfen çizimi kaydedin veya yeni bir çizim yapın.")
+                else:
+                    c.execute("INSERT INTO sent (user_id, tuval) VALUES (?, ?)", (uid, img_bytes_to_send))
+                    con.commit()
+                    st.success("Tuval başarıyla gönderildi!")
+                    st.image(io.BytesIO(img_bytes_to_send))
+
+    with right_col:
+
+        # Sohbet alanı için sabit yüksekliğe sahip konteyner
+        chat_area = st.container(height=500, border=True)
+
+        # Mesaj geçmişini hazırla (ilk mesaj bot tarafından gelsin)
+        if "messages" not in st.session_state or not st.session_state.messages:
+            st.session_state.messages = [
+                {
+                    "role": "assistant",
+                    "content": "Hoşgeldin! yarışmanın konsepti sadece resmederek bize anlatman. Unutma tek gayemiz mutlu bir nesil!",
+                }
+            ]
+
+        # Mesajları konteyner içinde göster (her çizimde)
+        with chat_area:
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+
+        # Kullanıcı girişini al (her çizimde)
+        if prompt := st.chat_input("Bizim hakkımızda soru sor!"):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with chat_area:
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                with st.chat_message("assistant"):
+                    response = st.write_stream(response_generator())
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            # Son asistan mesajını ElevenLabs ile seslendir
+            try:
+                api_key = os.getenv("ELEVEN_API_KEY")
+                if api_key and response and isinstance(response, str):
+                    client = ElevenLabs(api_key=api_key)
+                    audio_stream = client.text_to_speech.convert(
+                        voice_id="21m00Tcm4TlvDq8ikWAM",  # varsayılan: Rachel
+                        optimize_streaming_latency="0",
+                        output_format="mp3_44100_128",
+                        model_id="eleven_multilingual_v2",
+                        text=response,
+                    )
+                    audio_bytes = io.BytesIO()
+                    for chunk in audio_stream:
+                        if chunk:
+                            audio_bytes.write(chunk)
+                    audio_bytes.seek(0)
+                    audio_b64 = base64.b64encode(audio_bytes.getvalue()).decode("ascii")
+                    st.markdown(
+                        f"""
+<audio autoplay style=\"display:none\" src=\"data:audio/mpeg;base64,{audio_b64}\"></audio>
+""",
+                        unsafe_allow_html=True,
+                    )
+            except Exception:
+                pass
